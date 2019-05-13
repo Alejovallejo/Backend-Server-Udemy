@@ -8,194 +8,128 @@ var app = express();
 var Usuario = require('../models/usuario');
 
 
+var GoogleAuth = require('google-auth-library');
+var auth = new GoogleAuth;
 
-//gOOGLE
-var CLIENT_ID = require('../config/config').CLIENT_ID;
-const {OAuth2Client} = require('google-auth-library');
-const client = new OAuth2Client(CLIENT_ID);
+const GOOGLE_CLIENT_ID = require('../config/config').GOOGLE_CLIENT_ID;
+const GOOGLE_SECRET = require('../config/config').GOOGLE_SECRET;
+
+// ==========================================
+//  Autenticación De Google
+// ==========================================
+app.post('/google', (req, res) => {
+
+    var token = req.body.token || 'XXX';
 
 
+    var client = new auth.OAuth2(GOOGLE_CLIENT_ID, GOOGLE_SECRET, '');
 
-// ===========================
-// Autenticacion de Google
-// ===========================
-async function verify(token) {
-    const ticket = await client.verifyIdToken({
-        idToken: token,
-        audience: CLIENT_ID,  // Specify the CLIENT_ID of the app that accesses the backend
+    client.verifyIdToken(
+        token,
+        GOOGLE_CLIENT_ID,
         // Or, if multiple clients access the backend:
-        //[CLIENT_ID_1, CLIENT_ID_2, CLIENT_ID_3]
-    });
-    const payload = ticket.getPayload();
-    const userid = payload['sub'];
-    // If request specified a G Suite domain:
-    //const domain = payload['hd'];
-    return {
-        nombre: payload.name,
-        email: payload.email,
-        img: payload.img,
-        google: true,
-        payload: payload
-    }
+        //[CLIENT_ID_1, CLIENT_ID_2, CLIENT_ID_3],
+        function(e, login) {
 
-  }
+            if (e) {
+                return res.status(400).json({
+                    ok: true,
+                    mensaje: 'Token no válido',
+                    errors: e
+                });
+            }
 
 
+            var payload = login.getPayload();
+            var userid = payload['sub'];
+            // If request specified a G Suite domain:
+            //var domain = payload['hd'];
 
-app.post('/google', async(req, res) => {
+            Usuario.findOne({ email: payload.email }, (err, usuario) => {
 
+                if (err) {
+                    return res.status(500).json({
+                        ok: true,
+                        mensaje: 'Error al buscar usuario - login',
+                        errors: err
+                    });
+                }
 
-    var token = req.body.token;
+                if (usuario) {
 
-    var googleUser = await verify(token)
-                    .catch( e => {
-                        return res.status(403).json({
-                            ok:false,
-                            mesaje: 'Token no valido'
-
+                    if (usuario.google === false) {
+                        return res.status(400).json({
+                            ok: true,
+                            mensaje: 'Debe de usar su autenticación normal'
                         });
+                    } else {
+
+                        usuario.password = ':)';
+
+                        var token = jwt.sign({ usuario: usuario }, SEED, { expiresIn: 14400 }); // 4 horas
+
+                        res.status(200).json({
+                            ok: true,
+                            usuario: usuario,
+                            token: token,
+                            id: usuario._id
+                        });
+
+                    }
+
+                    // Si el usuario no existe por correo
+                } else {
+
+                    var usuario = new Usuario();
+
+
+                    usuario.nombre = payload.name;
+                    usuario.email = payload.email;
+                    usuario.password = ':)';
+                    usuario.img = payload.picture;
+                    usuario.google = true;
+
+                    usuario.save((err, usuarioDB) => {
+
+                        if (err) {
+                            return res.status(500).json({
+                                ok: true,
+                                mensaje: 'Error al crear usuario - google',
+                                errors: err
+                            });
+                        }
+
+
+                        var token = jwt.sign({ usuario: usuarioDB }, SEED, { expiresIn: 14400 }); // 4 horas
+
+                        res.status(200).json({
+                            ok: true,
+                            usuario: usuarioDB,
+                            token: token,
+                            id: usuarioDB._id
+                        });
+
                     });
 
-
-    Usuario.findOne({ email: googleUser.email }, (error, usuarioDB) => {
-
-        if(error){
-            return res.status(500).json({
-                ok: false,
-                mensaje: 'Error al Buscar Usuarios',
-                errors: error
-        
-            });   
-
-        }
-
-        if(usuarioDB){
-            
-            if(usuarioDB.google === false){
-            
-                return res.status(400).json({
-                    ok: false,
-                    mensaje: 'Debe usar autenticacopm normal',
-            
-                });   
-            }else{
-
-            var token = jwt.sign({ usuario: UsuarioDB }, SEED, { expiresIn: 14400 }); // 4 horas
-
-            res.status(200).json({
-                ok: true,
-                usuario: UsuarioDB,
-                token: token,
-                id: UsuarioDB._id
-
-                     });
+                }
 
 
-            }
-
-        } else {
-
-            //El usuario no existe.. hay qeu crearlo
-
-            var usuario = new Usuario();
-
-            usuario.nombre = googleUser.nombre;
-            usuario.email = googleUser.email;
-            usuario.img = googleUser.img;
-            usuario.google = true;
-            usuario.password = ':)';
+            });
 
 
-            usuario.save((error, usuarioDB) => {
+        });
 
 
 
-            }
-
-        }
-
-
-
-    });
-
-
-    // return res.status(200).json({
-
-    //     ok:true,
-    //     mensaje: 'OK!',
-    //     googleUser: googleUser
-
-    // });
 
 });
 
-
-
-// ===========================
-// Autentincacion Normal
-// ===========================
-
-
-
-
-
-
+// ==========================================
+//  Autenticación normal
+// ==========================================
 app.post('/', (req, res) => {
 
     var body = req.body;
-
-    Usuario.findOne({ email: body.email }, (error, UsuarioSB) => {
-
-        if(error){
-            return res.status(500).json({
-                ok: false,
-                mensaje: 'Error al Buscar Usuarios',
-                errors: error
-        
-            });   
-
-        }
-
-        if(!UsuarioSB){
-            return res.status(400).json({
-                ok: false,
-                mensaje: 'Credenciales Incorrectas - email',
-                errores: error
-            });
-        }
-
-        if(!bcrypt.compareSync( body.password, UsuarioSB.password ) ){
-            return res.status(400).json({
-                ok: false,
-                mensaje: 'Credenciales Incorrectas - password',
-                errores: error
-            });
-        }
-
-        //Crear un token!!
-        UsuarioSB.password = ':)';
-        var token = jwt.sign({ usuario: UsuarioSB }, SEED, { expiresIn: 14400 }); // 4 horas
-
-        res.status(200).json({
-            ok: true,
-            usuario: UsuarioSB,
-            token: token,
-            id: UsuarioSB._id
-        });
-
-    });
-
-
-});
-
-module.exports = app;
-
-
-
-/* login Fernando 
-
-
-  var body = req.body;
 
     Usuario.findOne({ email: body.email }, (err, usuarioDB) => {
 
@@ -235,7 +169,13 @@ module.exports = app;
             id: usuarioDB._id
         });
 
-    });
+    })
 
 
-*/
+});
+
+
+
+
+
+module.exports = app;
